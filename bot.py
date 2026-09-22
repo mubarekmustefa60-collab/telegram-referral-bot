@@ -2,15 +2,18 @@ import os
 import asyncio
 import logging
 import sqlite3
+import threading
+from flask import Flask
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, ChatMemberUpdated
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatMemberStatus
 
-# --- ENV VARIABLES (ከRender / Environment የሚወስድ) ---
+# --- ENV VARIABLES ---
 API_TOKEN = os.getenv("API_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
+PORT = int(os.getenv("PORT", 10000))
 
 if not API_TOKEN or CHANNEL_ID == 0:
     raise ValueError("❌ API_TOKEN ወይም CHANNEL_ID አልተሰጠም! Render Environment Variables ይመልከቱ።")
@@ -40,7 +43,17 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- HANDLERS ---
+# --- FLASK APP (ისთვის Port እንዲኖር) ---
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "🤖 Telegram Referral Bot is running and healthy!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=PORT)
+
+# --- AIOGRAM HANDLERS ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -71,14 +84,15 @@ async def cmd_start(message: Message):
 
     conn.close()
     
+    first_name = message.from_user.first_name or "ተጠቃሚ"
     text = (
-        f"👋 ሰላም **{message.from_user.first_name}**!\n\n"
-        f"🔗 **የእርስዎ ልዩ የኢንቫይት ሊንክ:**\n`{my_link}`\n\n"
-        f"📢 **ቻናላችን:** https://t.me/{CHANNEL_USERNAME}\n"
-        f"👥 የጋበዟቸው ሰው ብዛት: **{count}** ሰው\n\n"
+        f"👋 ሰላም <b>{first_name}</b>!\n\n"
+        f"🔗 <b>የእርስዎ ልዩ የኢንቫይት ሊንክ:</b>\n<code>{my_link}</code>\n\n"
+        f"📢 <b>ቻናላችን:</b> https://t.me/{CHANNEL_USERNAME}\n"
+        f"👥 የጋበዟቸው ሰው ብዛት: <b>{count}</b> ሰው\n\n"
         f"💡 ይህንን ሊንክ በመላክ ሰዎችን ወደ ቻናሉ ይጋብዙ!"
     )
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
@@ -90,7 +104,7 @@ async def cmd_stats(message: Message):
     conn.close()
     
     count = row[0] if row else 0
-    await message.answer(f"📊 አጠቃላይ የጋበዟቸው ሰው ብዛት: **{count}** ሰው", parse_mode="Markdown")
+    await message.answer(f"📊 አጠቃላይ የጋበዟቸው ሰው ብዛት: <b>{count}</b> ሰው", parse_mode="HTML")
 
 @dp.chat_member()
 async def track_chat_member(event: ChatMemberUpdated):
@@ -123,8 +137,9 @@ async def track_chat_member(event: ChatMemberUpdated):
                         updated_count = cursor.fetchone()[0]
                         await bot.send_message(
                             referrer_id,
-                            f"🎉 **እንኳን ደስ አለዎት!** አዲስ ሰው በሊንክዎ ቻናሉን ገብቷል.\n"
-                            f"👥 አጠቃላይ ግብዣዎ: **{updated_count}** ሰው"
+                            f"🎉 <b>እንኳን ደስ አለዎት!</b> አዲስ ሰው በሊንክዎ ቻናሉን ገብቷል.\n"
+                            f"👥 አጠቃላይ ግብዣዎ: <b>{updated_count}</b> ሰው",
+                            parse_mode="HTML"
                         )
                     except Exception:
                         pass
@@ -133,7 +148,14 @@ async def track_chat_member(event: ChatMemberUpdated):
 async def main():
     init_db()
     logging.basicConfig(level=logging.INFO)
-    print("🤖 ቦቱ መሥራት ጀምሯል...")
+    print("🤖 ቦቱ እና ፍላስክ ሰርቨር መሥራት ጀምረዋል...")
+    
+    # Flask ን በ Thread ማስጀመር
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    # Aiogram Polling ማስጀመር
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
