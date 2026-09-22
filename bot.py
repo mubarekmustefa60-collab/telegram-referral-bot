@@ -4,8 +4,8 @@ import logging
 import sqlite3
 import threading
 from flask import Flask
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message, ChatMemberUpdated
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, ChatMemberUpdated, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatMemberStatus
 
@@ -14,6 +14,8 @@ API_TOKEN = os.getenv("API_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 PORT = int(os.getenv("PORT", 10000))
+# አማራጭ: የኦነር ቴሌግራም ID ካለዎት እዚህ ያስገቡ (አልያም bot ላይ /myid ብለው ማወቅ ይቻላል)
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # ማስገባት ካልፈለጉ 0 ይტዉትና ሪፖርት በ /admin ሲጠየቅ ማሳየት እንችላለን
 
 if not API_TOKEN or CHANNEL_ID == 0:
     raise ValueError("❌ API_TOKEN ወይም CHANNEL_ID አልተሰጠም! Render Environment Variables ይመልከቱ።")
@@ -30,6 +32,8 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
             invite_link TEXT,
             invite_count INTEGER DEFAULT 0
         )
@@ -42,6 +46,16 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
+
+# --- KEYBOARD ---
+def get_main_keyboard():
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 የጋበዝኩት ሰው ብዛት")]
+        ],
+        resize_keyboard=True
+    )
+    return kb
 
 # --- FLASK APP (ისთვის Port እንዲኖር) ---
 app = Flask(__name__)
@@ -57,6 +71,9 @@ def run_flask():
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
+    username = message.from_user.username or "None"
+    full_name = message.from_user.full_name or "ተጠቃሚ"
+    
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
@@ -74,7 +91,10 @@ async def cmd_start(message: Message):
             )
             my_link = invite_obj.invite_link
             count = 0
-            cursor.execute("INSERT INTO users (user_id, invite_link, invite_count) VALUES (?, ?, ?)", (user_id, my_link, 0))
+            cursor.execute(
+                "INSERT INTO users (user_id, username, full_name, invite_link, invite_count) VALUES (?, ?, ?, ?, ?)",
+                (user_id, username, full_name, my_link, 0)
+            )
             cursor.execute("INSERT OR REPLACE INTO invite_links (invite_link, user_id) VALUES (?, ?)", (my_link, user_id))
             conn.commit()
         except Exception as e:
@@ -84,27 +104,80 @@ async def cmd_start(message: Message):
 
     conn.close()
     
-    first_name = message.from_user.first_name or "ተጠቃሚ"
     text = (
-        f"👋 ሰላም <b>{first_name}</b>!\n\n"
-        f"🔗 <b>የእርስዎ ልዩ የኢንቫይት ሊንክ:</b>\n<code>{my_link}</code>\n\n"
-        f"📢 <b>ቻናላችን:</b> https://t.me/{CHANNEL_USERNAME}\n"
+        f"👋 ሰላም <b>{full_name}</b>!\n\n"
+        f"🔗 <b>የእርስዎ ልዩ መጋበዣ LINK:</b>\n<code>{my_link}</code>\n\n"
         f"👥 የጋበዟቸው ሰው ብዛት: <b>{count}</b> ሰው\n\n"
-        f"💡 ይህንን ሊንክ በመላክ ሰዎችን ወደ ቻናሉ ይጋብዙ!"
+        f"💡 በዚህ የእርሶ ብቻ ልዩ referal link 15 የ 2019 remedial ተማሪዎችን ሲጋብዙ የ remedial matrix Bot እና remedial matrix tutorial 2019 ክፍት ይደረግልዎታል ምንም ሳይከፍል🎓"
     )
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
 
+@dp.message(F.text == "📊 የጋበዝኩት ሰው ብዛት")
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     user_id = message.from_user.id
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT invite_count FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT invite_count, invite_link FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     
-    count = row[0] if row else 0
-    await message.answer(f"📊 አጠቃላይ የጋበዟቸው ሰው ብዛት: <b>{count}</b> ሰው", parse_mode="HTML")
+    if row:
+        count, my_link = row
+    else:
+        count, my_link = 0, "የለዎትም"
+
+    if count >= 15:
+        await message.answer(
+            f"🎉እንኳን ደስ አለዎት! 15 የ2019 remedial ተማሪዎችን ጋብዘዋል!\n"
+            f"👥 አጠቃላይ ግብዣዎ: <b>{count}</b> ሰው\n\n"
+            f"🔓 ቱቶሪያል እና ቦቱ እንዲከፈትልዎ እባክዎ ውድ <b>@remedial_matrix_support</b> ያናግሩኝ!",
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+    else:
+        remaining = 15 - count
+        await message.answer(
+            f"📊 እስካሁን የጋበዟቸው ሰው ብዛት: <b>{count}</b> ሰው\n"
+            f"🎯 ከ 15 ለመድረስ የቀረዎት: <b>{remaining}</b> ሰው\n\n"
+            f"🔗 የእርስዎ ሊንክ:\n<code>{my_link}</code>\n\n"
+            f"💡 15 ሲሞሉ <b>@remedial_matrix_support</b> ያናግሩኝ!",
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+
+# --- OWNER ADMIN REPORT COMMAND ---
+@dp.message(Command("admin"))
+async def cmd_admin(message: Message):
+    user_id = message.from_user.id
+    # አማራጭ: ማንኛውም ሰው እንዳያይ ማድረግ ከፈለጉ (OWNER_ID != 0 and user_id != OWNER_ID) ማጥራት ይቻላል። 
+    # ግን ለአሁኑ ትዕዛዙን የላከው ማንም ይሁን ወይም ራሱ owner ሲል ሙሉ ሪፖርት እንስጥ:
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, full_name, username, invite_link, invite_count FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await message.answer("📁 እስካሁን የተመዘገበ ተጠቃሚ የለም።")
+        return
+    
+    report_text = "📋 <b>የሁሉም ተጠቃሚዎች ሪፖርት (Owner Report):</b>\n\n"
+    for r in rows:
+        uid, fname, uname, ulink, ucount = r
+        report_text += (
+            f"👤 ስም: <b>{fname}</b> (ID: <code>{uid}</code>, @{uname})\n"
+            f"🔗 ሊንክ: <code>{ulink}</code>\n"
+            f"👥 ጋበዘው: <b>{ucount}</b> ሰው\n"
+            f"----------------------------------\n"
+        )
+        # ሜሴጅ በጣም እንዳይረዝም (Telegram limit 4096chars)
+        if len(report_text) > 3500:
+            await message.answer(report_text, parse_mode="HTML")
+            report_text = ""
+            
+    if report_text:
+        await message.answer(report_text, parse_mode="HTML")
 
 @dp.chat_member()
 async def track_chat_member(event: ChatMemberUpdated):
@@ -135,12 +208,21 @@ async def track_chat_member(event: ChatMemberUpdated):
                     try:
                         cursor.execute("SELECT invite_count FROM users WHERE user_id = ?", (referrer_id,))
                         updated_count = cursor.fetchone()[0]
-                        await bot.send_message(
-                            referrer_id,
-                            f"🎉 <b>እንኳን ደስ አለዎት!</b> አዲስ ሰው በሊንክዎ ቻናሉን ገብቷል.\n"
-                            f"👥 አጠቃላይ ግብዣዎ: <b>{updated_count}</b> ሰው",
-                            parse_mode="HTML"
-                        )
+                        if updated_count >= 15:
+                            await bot.send_message(
+                                referrer_id,
+                                f"🎉 <b>እንኳን ደስ አለዎት!</b> 15 ሰዎችን ሞልተዋል!\n"
+                                f"👥 አጠቃላይ ግብዣዎ: <b>{updated_count}</b> ሰው\n"
+                                f"🔓 ቱቶሪያል እንዲከፈትልዎ እባክዎ <b>@remedial_matrix_support</b> ያናግሩኝ!",
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await bot.send_message(
+                                referrer_id,
+                                f"🎉 <b>እንኳን ደስ አለዎት!</b> አዲስ ሰው በሊንክዎ ቻናሉን ገብቷል.\n"
+                                f"👥 አጠቃላይ ግብዣዎ: <b>{updated_count}</b> ሰው (ከ15 ለመድረስ {15 - updated_count} ቀርቷል)",
+                                parse_mode="HTML"
+                            )
                     except Exception:
                         pass
             conn.close()
@@ -150,12 +232,10 @@ async def main():
     logging.basicConfig(level=logging.INFO)
     print("🤖 ቦቱ እና ፍላስክ ሰርቨር መሥራት ጀምረዋል...")
     
-    # Flask ን በ Thread ማስጀመር
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Aiogram Polling ማስጀመር
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
